@@ -19,17 +19,19 @@ end
 
 open iex console by running `iex -S mix`
 
+```elixir
 # Create User
 ExBanking.create_user("username")
 
 # Deposit money
-ExBanking.deposit("username", amount(ex. 100), currency(ex. "INR"))
+ExBanking.deposit("username", 100,  "INR")
 
 # Withdraw money
-ExBanking.withdraw("username", amount(ex. 100), currency(ex. "INR"))
+ExBanking.withdraw("username", 100, "INR")
 
 # Send money
-ExBanking.send(from_user, to_user,amount(ex. 100), currency(ex. "INR"))
+ExBanking.send(from_user, to_user, 100, "INR")
+```
 
 Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
 and published on [HexDocs](https://hexdocs.pm). Once published, the docs can

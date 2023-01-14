@@ -1,172 +1,113 @@
-defmodule User do
+defmodule ExBanking.User do
   use GenServer
 
+  @error_messages [
+    default_user_error: :user_does_not_exist,
+    default_request_error: :too_many_requests_to_user,
+    sender_error: :sender_does_not_exist,
+    receiver_error: :receiver_does_not_exist,
+    sender_request_error: :too_many_requests_to_sender,
+    receiver_request_error: :too_many_requests_to_receiver
+  ]
+
   def start_link(user) do
-    GenServer.start_link(__MODULE__, :ok, name: user)
-  end
-
-  def init(:ok) do
-    {:ok, %{}}
-  end
-
-  def create(username) do
-    start_link(username)
-    GenServer.call(Process.whereis(username), {:create_user, username})
-  end
-
-  def get_balance(username, currency) do
-    case Process.whereis(username) do
-      nil ->
-        {:error, :user_does_not_exists}
-
-      pid ->
-        GenServer.call(pid, {:get_balance, username, currency})
+    case GenServer.start_link(__MODULE__, [],
+      name: {:via, Registry, {ExBanking.UserRegistery, user}}
+    ) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, _pid}} -> {:error, :user_already_exist}
     end
   end
 
-  def withdraw(username, amount, currency) do
-    case Process.whereis(username) do
-      nil ->
-        {:error, :user_does_not_exists}
+  def init(_) do
+    {:ok, %{account: %{}}}
+  end
 
-      pid ->
-        GenServer.call(pid, {:withdraw, username, amount, currency})
+  def get_balance(user, currency) do
+    with {:ok, pid} <- user_exists?(user),
+    :ok <- perform_request?(pid) do
+      GenServer.call(pid, {:get_balance, currency})
     end
   end
 
-  def deposit(username, amount, currency) do
-    case Process.whereis(username) do
-      nil ->
-        {:error, :user_does_not_exists}
+  def withdraw(user, amount, currency) do
+    with {:ok, pid} <- user_exists?(user),
+    :ok <- perform_request?(pid) do
+      GenServer.call(pid, {:withdraw, amount, currency})
+    end
+  end
 
-      pid ->
-        GenServer.call(pid, {:deposit, username, amount, currency})
+  def deposit(user, amount, currency) do
+    with {:ok, pid} <- user_exists?(user),
+    :ok <- perform_request?(pid) do
+      GenServer.call(pid, {:deposit, amount, currency})
     end
   end
 
   def send(sender, receiver, amount, currency) do
-    sender_pid = Process.whereis(sender)
-    receiver_pid = Process.whereis(receiver)
-
-    cond do
-      sender_pid == nil ->
-        {:error, :sender_does_not_exist}
-
-      receiver_pid == nil ->
-        {:error, :receiver_does_not_exist}
-
-      true ->
-        withdraw_response = GenServer.call(sender_pid, {:withdraw, sender, amount, currency})
-
-        deposit_response = GenServer.call(receiver_pid, {:deposit, receiver, amount, currency})
-
-        create_response(withdraw_response, deposit_response)
+    with {:ok, sender_pid} <- user_exists?(sender, :sender_error),
+      {:ok, receiver_pid} <- user_exists?(receiver, :receiver_error),
+      :ok <- perform_request?(sender_pid, :too_many_requests_to_sender),
+      :ok <- perform_request?(receiver_pid, :too_many_requests_to_receiver),
+      {:ok, sender_balance} <- GenServer.call(sender_pid, {:withdraw, amount, currency}),
+      {:ok, receiver_balance} <- GenServer.call(receiver_pid, {:deposit, amount, currency}) do
+        {:ok, sender_balance, receiver_balance}
     end
   end
 
-  def handle_call({:create_user, username}, _from, state) do
-    case Map.get(state, username) do
+  def handle_call({:get_balance, currency}, _from, state) do
+    current_balance = Map.get(state.account, currency)
+
+    case current_balance do
       nil ->
-        data = %{
-          user: Atom.to_string(username),
-          amount: 0,
-          currency: nil
-        }
-
-        {:reply, :ok, Map.put(state, username, data)}
-
+        {:reply, {:error, :wrong_arguments}, state}
       _ ->
-        {:reply, {:error, :user_already_exists}, state}
+        {:reply, {:ok, current_balance}, state}
     end
   end
 
-  def handle_call({:get_balance, user, currency}, _from, state) do
-    {_, len} = Process.info(self(), :message_queue_len)
-    user_data = Map.get(state, user)
+  def handle_call({:withdraw, amount, currency}, _from, state) do
+    current_balance = Map.get(state.account, currency)
 
     cond do
-      is_nil(user_data) ->
-        {:reply, {:error, :user_does_not_exist}, state}
-
-      len > 10 ->
-        {:reply, {:error, :too_many_requests_to_user}, state}
-
-      user_data[:currency] != currency ->
+      is_nil(current_balance) ->
         {:reply, {:error, :wrong_arguments}, state}
-
-      true ->
-        {:reply, {:ok, set_precision(user_data[:amount])}, state}
-    end
-  end
-
-  def handle_call({:withdraw, user, amount, currency}, _from, state) do
-    {_, len} = Process.info(self(), :message_queue_len)
-    user_data = Map.get(state, user)
-
-    cond do
-      len > 10 ->
-        {:reply, {:error, :too_many_requests_to_user}, state}
-
-      user_data[:currency] != currency ->
-        {:reply, {:error, :wrong_arguments}, state}
-
-      user_data[:amount] < amount ->
+      current_balance < amount ->
         {:reply, {:error, :not_enough_money}, state}
-
       true ->
-        updated_data = Map.put(user_data, :amount, user_data[:amount] - amount)
-        {:reply, {:ok, set_precision(updated_data[:amount])}, Map.put(state, user, updated_data)}
+        new_balance = current_balance - amount
+          |> :erlang.float()
+          |> Float.round(2)
+
+        {:reply, {:ok, new_balance}, %{account: Map.put(state.account, currency, new_balance)}}
     end
   end
 
-  def handle_call({:deposit, user, amount, currency}, _from, state) do
-    {_, len} = Process.info(self(), :message_queue_len)
-    user_data = Map.get(state, user)
+  def handle_call({:deposit, amount, currency}, _from, state) do
+    current_balance = Map.get(state.account, currency, 0.0)
 
-    cond do
-      is_nil(user_data) ->
-        {:reply, {:error, :user_does_not_exist}, state}
+    new_balance = current_balance + amount
+      |> :erlang.float()
+      |> Float.round(2)
 
-      len > 10 ->
-        {:reply, {:error, :too_many_requests_to_user}, state}
+    {:reply, {:ok, new_balance}, %{account: Map.put(state.account, currency, new_balance)}}
+  end
 
-      is_nil(user_data[:currency]) ->
-        updated_data =
-          user_data
-          |> Map.put(:amount, user_data[:amount] + amount)
-          |> Map.put(:currency, currency)
-
-        {:reply, {:ok, set_precision(updated_data[:amount])}, Map.put(state, user, updated_data)}
-
-      user_data[:currency] == currency ->
-        updated_data =
-          user_data
-          |> Map.put(:amount, user_data[:amount] + amount)
-
-        {:reply, {:ok, set_precision(updated_data[:amount])}, Map.put(state, user, updated_data)}
-
-      user_data[:currency] != currency ->
-        {:reply, {:error, :wrong_arguments}, state}
+  defp user_exists?(user, error_message \\ :default_user_error) do
+    case Registry.lookup(ExBanking.UserRegistery, user) do
+      [] ->
+        {:error, Keyword.get(@error_messages, error_message)}
+      [{pid, _}] ->
+        {:ok, pid}
     end
   end
 
-  defp create_response({:error, reason}, _) do
-    {:error, reason}
-  end
-
-  defp create_response(_, {:error, reason}) do
-    {:error, reason}
-  end
-
-  defp create_response({:ok, sender_new_balance}, {:ok, receiver_new_balance}) do
-    {:ok, sender_new_balance, receiver_new_balance}
-  end
-
-  defp set_precision(amount) when is_float(amount) do
-    Float.round(amount, 2)
-  end
-
-  defp set_precision(amount) do
-    amount
+  defp perform_request?(pid, error_message \\ :default_request_error) do
+    case :erlang.process_info(pid, :message_queue_len) do
+      {:message_queue_len, length} when length < 10 ->
+        :ok
+      _ ->
+        {:error, Keyword.get(@error_messages, error_message)}
+    end
   end
 end

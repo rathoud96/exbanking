@@ -3,50 +3,55 @@ defmodule ExBanking do
   Documentation for `ExBanking`.
   """
 
-  use GenServer
+  alias ExBanking.User
 
-  def start_link(_) do
-    GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
-  end
 
-  def init(:ok) do
-    {:ok, %{}}
-  end
-
-  # API
-  def create_user(username) when is_binary(username) do
-    User.create(String.to_atom(username))
+  @spec create_user(user :: String.t()) :: :ok | {:error, :wrong_arguments | :user_already_exists}
+  def create_user(user) when is_binary(user) do
+    case ExBanking.UserSupervisor.create_user(user) do
+      {:ok, _pid} -> :ok
+      error -> error
+    end
   end
 
   def create_user(_) do
     {:error, :wrong_arguments}
   end
 
-  def get_balance(user, currency) do
-    User.get_balance(String.to_atom(user), currency)
+
+  @spec get_balance(user :: String.t, currency :: String.t) :: {:ok, balance :: number} | {:error, :wrong_arguments | :user_does_not_exist | :too_many_requests_to_user}
+  def get_balance(user, currency) when is_binary(currency) do
+    User.get_balance(user, currency)
   end
 
-  def deposit(_user, amount, _currency) when amount < 0 do
+  def get_balance(_user, _currency) do
     {:error, :wrong_arguments}
   end
 
-  def deposit(user, amount, currency) do
-    User.deposit(String.to_atom(user), amount, currency)
+  @spec deposit(user :: String.t, amount :: number, currency :: String.t) :: {:ok, new_balance :: number} | {:error, :wrong_arguments | :user_does_not_exist | :too_many_requests_to_user}
+  def deposit(user, amount, currency) when amount > 0 do
+    User.deposit(user, amount, currency)
   end
 
-  def withdraw(_user, amount, _currency) when amount < 0 do
+  def deposit(_username, _amount, _currency) do
     {:error, :wrong_arguments}
   end
 
-  def withdraw(user, amount, currency) do
-    User.withdraw(String.to_atom(user), amount, currency)
+  @spec withdraw(user :: String.t, amount :: number, currency :: String.t) :: {:ok, new_balance :: number} | {:error, :wrong_arguments | :user_does_not_exist | :not_enough_money | :too_many_requests_to_user}
+  def withdraw(user, amount, currency) when amount > 0 do
+    User.withdraw(user, amount, currency)
   end
 
-  def send(_from_user, _to_user, amount, _currency) when amount < 0 do
+  def withdraw(_user, _amount, _currency) do
     {:error, :wrong_arguments}
   end
 
-  def send(from_user, to_user, amount, currency) do
-    User.send(String.to_atom(from_user), String.to_atom(to_user), amount, currency)
+  @spec send(from_user :: String.t, to_user :: String.t, amount :: number, currency :: String.t) :: {:ok, from_user_balance :: number, to_user_balance :: number} | {:error, :wrong_arguments | :not_enough_money | :sender_does_not_exist | :receiver_does_not_exist | :too_many_requests_to_sender | :too_many_requests_to_receiver}
+  def send(from_user, to_user, amount, currency) when amount > 0 do
+    User.send(from_user, to_user, amount, currency)
+  end
+
+  def send(_from_user, _to_user, _amount, _currency) do
+    {:error, :wrong_arguments}
   end
 end

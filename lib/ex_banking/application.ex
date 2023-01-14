@@ -8,8 +8,8 @@ defmodule ExBanking.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      ExBanking
-      # {ExBanking.Worker, arg}
+      ExBanking.UserSupervisor,
+      ExBanking.UserRegistery.child_spec()
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
